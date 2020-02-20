@@ -1,0 +1,18 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Required Tags DynamoDB Table Cloudformation Stack
+Resources:
+  RequiredTagsDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: required-tags-table
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        -
+          AttributeName: resource_type
+          AttributeType: S
+      KeySchema:
+        -
+          AttributeName: resource_type
+          KeyType: HASH

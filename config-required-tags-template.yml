@@ -1,0 +1,649 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Required Tags Config Rules and Remediation Cloudformation Stack
+Parameters:
+  prefix:
+    Type: String
+    Description: Name prefix for resources
+    Default: 'required-tags-stack'
+
+Resources:
+  RuleLambdaRole:
+    Description: IAM role for Config Rule Lambda
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join 
+        - ''
+        - - !Ref prefix
+          - "-required-tags-rule-lambda-role-"
+          - !Select
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: DynamoAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'dynamodb:GetItem'
+                Resource: '*'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/service-role/AWSConfigRulesExecutionRole'
+
+  RequiredTagsRuleLambda:
+    Description: Lambda function for the required tags config rule
+    Type: 'AWS::Lambda::Function'
+    DependsOn: RuleLambdaRole
+    Properties:
+      Code:
+        S3Bucket: meetup-automated-tagging-presentation
+        S3Key: lambda/tags-present/lambda_function.py.zip
+      FunctionName: !Join 
+        - ''
+        - - !Ref prefix
+          - "-config-required-tags-function-"
+          - !Select
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.7
+      Role: !GetAtt 
+        - RuleLambdaRole
+        - Arn
+      ReservedConcurrentExecutions: 1
+
+  ConfigTriggerTagsPresentRuleLambdaPermission:
+    Description: Lambda permissions for the config rule function to be triggered by config
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - RequiredTagsRuleLambda
+    Properties:
+      FunctionName: !GetAtt 
+        - RequiredTagsRuleLambda
+        - Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: config.amazonaws.com
+
+  #################################################
+  # TODO: Add ConfigRules for additional resources
+  #################################################
+  S3BucketTaggingConfigRule:
+      Type: 'AWS::Config::ConfigRule'
+      Description: Config rule monitoring S3 buckets missing required tags
+      DependsOn:
+        - ConfigTriggerTagsPresentRuleLambdaPermission
+        - RequiredTagsRuleLambda
+      Properties:
+        ConfigRuleName: !Join
+          - ''
+          - -  !Ref prefix 
+            -  "-required-tags-s3-bucket-"
+            - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+        Scope:
+          ComplianceResourceTypes:
+            - 'AWS::S3::Bucket'
+        Source:
+          Owner: CUSTOM_LAMBDA
+          SourceDetails:
+            - EventSource: aws.config
+              MessageType: ConfigurationItemChangeNotification
+          SourceIdentifier: !GetAtt 
+            - RequiredTagsRuleLambda
+            - Arn
+
+  EC2InstanceTaggingConfigRule:
+    Type: 'AWS::Config::ConfigRule'
+    Description: Config rule monitoring EC2 instances for missing required tags
+    DependsOn:
+      - ConfigTriggerTagsPresentRuleLambdaPermission
+      - RequiredTagsRuleLambda
+    Properties:
+      ConfigRuleName: !Join
+        - ''
+        - -  !Ref prefix 
+          -  "-required-tags-ec2-instance-"
+          - !Select 
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      Scope:
+        ComplianceResourceTypes:
+          - 'AWS::EC2::Instance'
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier: !GetAtt 
+          - RequiredTagsRuleLambda
+          - Arn
+
+  RDSDBInstanceTaggingConfigRule:
+      Type: 'AWS::Config::ConfigRule'
+      Description: Config rule monitoring RDS DB Instances for missing required tags
+      DependsOn:
+        - ConfigTriggerTagsPresentRuleLambdaPermission
+        - RequiredTagsRuleLambda
+      Properties:
+        ConfigRuleName: !Join
+          - ''
+          - -  !Ref prefix 
+            -  "-required-tags-rds-dbinstance-"
+            - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+        Scope:
+          ComplianceResourceTypes:
+            - 'AWS::RDS::DBInstance'
+        Source:
+          Owner: CUSTOM_LAMBDA
+          SourceDetails:
+            - EventSource: aws.config
+              MessageType: ConfigurationItemChangeNotification
+          SourceIdentifier: !GetAtt 
+            - RequiredTagsRuleLambda
+            - Arn
+
+  ###############
+  ## Remediation
+  ###############
+  #############################################################
+  # TODO: Add ConfigRemediationTopics for additional resources
+  #############################################################
+  EC2InstanceConfigRemediationTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+            TopicName: !Join
+              - ''
+              - -  !Ref prefix 
+                -  "-tagging-remediation-topic-ec2-instance-"
+                - !Select
+                  - 0
+                  - !Split
+                    - "-"
+                    - !Select
+                      - 2
+                      - !Split
+                        - "/"
+                        - !Ref "AWS::StackId"
+
+  S3BucketConfigRemediationTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+            TopicName: !Join
+              - ''
+              - -  !Ref prefix 
+                -  "-tagging-remediation-topic-s3-bucket-"
+                - !Select
+                  - 0
+                  - !Split
+                    - "-"
+                    - !Select
+                      - 2
+                      - !Split
+                        - "/"
+                        - !Ref "AWS::StackId"
+
+  RDSDBInstanceConfigRemediationTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+            TopicName: !Join
+              - ''
+              - -  !Ref prefix 
+                -  "-tagging-remediation-topic-rds-dbinstance-"
+                - !Select
+                  - 0
+                  - !Split
+                    - "-"
+                    - !Select
+                      - 2
+                      - !Split
+                        - "/"
+                        - !Ref "AWS::StackId"
+
+  ConfigRemediationAutomationRole:
+    Description: ConfigRemediationAutomationRole
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join 
+        - ''
+        - - !Ref prefix
+          - "-required-tags-remediation-role-"
+          - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ssm.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole'
+
+  ConfigSNSPublishPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+        PolicyName: !Join
+          - ''
+          - - !Ref prefix
+            - "-config-sns-publish-policy-"
+            - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - "sns:Publish"
+              Resource: '*'
+        Roles:
+          - !Ref ConfigRemediationAutomationRole
+
+  ConfigRemediationQueue:
+    Type: 'AWS::SQS::Queue'
+    Description: config_remediation_queue
+    Properties:
+            QueueName: !Join
+              - ''
+              - - !Ref prefix
+                - "-tagging-remediation-queue-"
+                - !Select
+                  - 0
+                  - !Split
+                    - "-"
+                    - !Select
+                      - 2
+                      - !Split
+                        - "/"
+                        - !Ref "AWS::StackId"
+
+  ###########################################################
+  # TODO: Add SNSTopicSubscriptions for additional resources
+  ###########################################################
+  EC2InstanceSNSTopicsubscription:
+      Type: 'AWS::SNS::Subscription'
+      Properties: 
+        Endpoint: !GetAtt 
+                      - "ConfigRemediationQueue"
+                      - "Arn"
+        Protocol: sqs
+        TopicArn: !Ref EC2InstanceConfigRemediationTopic
+
+  S3BucketSNSTopicsubscription:
+    Type: 'AWS::SNS::Subscription'
+    Properties: 
+      Endpoint: !GetAtt 
+                    - "ConfigRemediationQueue"
+                    - "Arn"
+      Protocol: sqs
+      TopicArn: !Ref S3BucketConfigRemediationTopic
+
+  RDSDBInstanceSNSTopicsubscription:
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      Endpoint: !GetAtt 
+                    - "ConfigRemediationQueue"
+                    - "Arn"
+      Protocol: sqs
+      TopicArn: !Ref RDSDBInstanceConfigRemediationTopic
+
+  SNSTopicQueuePolicy:
+    Type: 'AWS::SQS::QueuePolicy'
+    Properties:
+        PolicyDocument:
+            Version: 2012-10-17
+            Id: ConfigSnsTopicQueuePolicy
+            Statement:
+                - Sid: "Allow-SNS-SendMessage"
+                  Effect: Allow
+                  Principal:
+                    AWS: '*' 
+                  Action:
+                      - "SQS:SendMessage"
+                  Resource: !GetAtt
+                              - "ConfigRemediationQueue"
+                              - "Arn"
+                  Condition:
+                      ArnEquals:
+                          'aws:SourceArn':
+                            #################################################
+                            # TODO: Add SourceArns for additional resources
+                            #################################################
+                            - !Ref EC2InstanceConfigRemediationTopic
+                            - !Ref S3BucketConfigRemediationTopic
+                            - !Ref RDSDBInstanceConfigRemediationTopic
+        Queues:
+            - !Ref ConfigRemediationQueue
+      
+  RemediationLambdaRole:
+    Description: required-tags-remediation-lambda-role
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join 
+        - ''
+        - - !Ref prefix
+          - "-required-tags-remed-lambda-role-"
+          - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: DynamoAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'dynamodb:GetItem'
+                Resource: '*'
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaSQSQueueExecutionRole'
+
+  RequiredTagsRemediationLambda:
+    Description: This is required_tags_remediation Lambda function
+    Type: 'AWS::Lambda::Function'
+    DependsOn: RemediationLambdaRole
+    Properties:
+      Code:
+        S3Bucket: meetup-automated-tagging-presentation
+        S3Key: lambda/tags-present-remediation/adding_tags_lambda_function.py.zip
+      FunctionName: !Join 
+        - ''
+        - - !Ref prefix
+          - "-required-tags-remediation-function-"
+          - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+      Handler: adding_tags_lambda_function.lambda_handler
+      Runtime: python3.7
+      Role: !GetAtt
+        - RemediationLambdaRole
+        - Arn
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+            #################################################
+            # TODO: Add Topic Arns for additional resources
+            #################################################
+            EC2_INSTANCE_CONFIG_TOPIC_ARN: !Ref EC2InstanceConfigRemediationTopic
+            S3_BUCKET_CONFIG_TOPIC_ARN: !Ref S3BucketConfigRemediationTopic
+            RDS_INSTANCE_CONFIG_TOPIC_ARN: !Ref RDSDBInstanceConfigRemediationTopic
+            LOG_LEVEL: ERROR
+
+  RemediationLambdaRoleTaggingPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+        PolicyName: !Join
+          - ''
+          - - !Ref prefix
+            - "-tagging-policy-"
+            - !Select
+              - 0
+              - !Split
+                - "-"
+                - !Select
+                  - 2
+                  - !Split
+                    - "/"
+                    - !Ref "AWS::StackId"
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                #########################################################
+                # TODO: Add tagging permissions for additional resources
+                #########################################################
+                - "tag:GetResources"
+                - "tag:TagResources"
+                - "tag:UntagResources"
+                - "tag:GetTagKeys"
+                - "tag:GetTagValues"
+                - "config:Get*"
+                - "config:Describe*"
+                - "config:Deliver*"
+                - "config:List*"
+                - "ec2:DescribeTags"
+                - "ec2:CreateTags"
+                - "ec2:DeleteTags"
+                - "s3:GetBucketTagging"
+                - "s3:PutBucketTagging"
+                - "rds:AddTagsToResource"
+                - "rds:ListTagsForResource"
+                - "rds:RemoveTagsFromResource"
+              Resource: '*'
+        Roles:
+          - !Ref RemediationLambdaRole
+
+  RemediationLambdaEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt
+                      - ConfigRemediationQueue
+                      - Arn
+      FunctionName: !GetAtt
+                      - RequiredTagsRemediationLambda
+                      - Arn
+
+  ##############################################################
+  # TODO: Add RemediationConfiguration for additional resources
+  ##############################################################
+  S3BucketRemediationConfiguration:
+    Type: 'AWS::Config::RemediationConfiguration'
+    Properties:
+      Automatic: true
+      ConfigRuleName: !Ref S3BucketTaggingConfigRule
+      MaximumAutomaticAttempts: 5
+      RetryAttemptSeconds: 60
+      TargetId: AWS-PublishSNSNotification
+      TargetType: SSM_DOCUMENT
+      Parameters:
+        TopicArn:
+          StaticValue:
+            Values: [ !Ref S3BucketConfigRemediationTopic ]
+        Message:
+          ResourceValue:
+            Value: RESOURCE_ID
+        AutomationAssumeRole:
+          StaticValue:
+            Values: [ !GetAtt ConfigRemediationAutomationRole.Arn ]
+
+  EC2InstanceTaggingRemediationConfiguration:
+    Type: 'AWS::Config::RemediationConfiguration'
+    Properties:
+      Automatic: true
+      ConfigRuleName: !Ref EC2InstanceTaggingConfigRule
+      MaximumAutomaticAttempts: 5
+      RetryAttemptSeconds: 60
+      TargetId: AWS-PublishSNSNotification
+      TargetType: SSM_DOCUMENT
+      Parameters:
+        TopicArn:
+          StaticValue:
+            Values: [ !Ref EC2InstanceConfigRemediationTopic ]
+        Message:
+          ResourceValue:
+            Value: RESOURCE_ID
+        AutomationAssumeRole:
+          StaticValue:
+            Values: [ !GetAtt ConfigRemediationAutomationRole.Arn ]
+
+  RDSDBInstanceTaggingRemediationConfiguration:
+    Type: 'AWS::Config::RemediationConfiguration'
+    Properties:
+      Automatic: true
+      ConfigRuleName: !Ref RDSDBInstanceTaggingConfigRule
+      MaximumAutomaticAttempts: 5
+      RetryAttemptSeconds: 60
+      TargetId: AWS-PublishSNSNotification
+      TargetType: SSM_DOCUMENT
+      Parameters:
+        TopicArn:
+          StaticValue:
+            Values: [ !Ref RDSDBInstanceConfigRemediationTopic ]
+        Message:
+          ResourceValue:
+            Value: RESOURCE_ID
+        AutomationAssumeRole:
+          StaticValue:
+            Values: [ !GetAtt ConfigRemediationAutomationRole.Arn ]
+
+#################################
+# Required Tags value validation
+#################################
+  RequiredTagsValueValidationRuleLambda:
+    Description: Lambda function for the required tags value validation config rule
+    Type: 'AWS::Lambda::Function'
+    DependsOn: RuleLambdaRole
+    Properties:
+      Code:
+        S3Bucket: meetup-automated-tagging-presentation
+        S3Key: lambda/tags-value-validation/lambda_function.py.zip
+      FunctionName: !Join
+        - ''
+        - - !Ref prefix
+          - "-config-required-tags-vv-"
+          - !Select
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.7
+      Role: !GetAtt
+        - RuleLambdaRole
+        - Arn
+      ReservedConcurrentExecutions: 1
+
+  ConfigTriggerValueValidationRuleLambdaPermission:
+    Description: Lambda permissions for the config rule function to be triggered by config
+    Type: 'AWS::Lambda::Permission'
+    DependsOn:
+      - RequiredTagsRuleLambda
+    Properties:
+      FunctionName: !GetAtt
+        - RequiredTagsValueValidationRuleLambda
+        - Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: config.amazonaws.com
+
+  ValueValidationConfigRule:
+    Type: 'AWS::Config::ConfigRule'
+    Description: Config rule monitoring resources for invalid values on required tags
+    DependsOn:
+      - ConfigTriggerValueValidationRuleLambdaPermission
+      - RequiredTagsValueValidationRuleLambda
+    Properties:
+      ConfigRuleName: !Join
+        - ''
+        - - !Ref prefix
+          - "-required-tags-value-validation-"
+          - !Select
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      Scope:
+        ##############################################################
+        # TODO: Add ComplianceResourceTypes for additional resources
+        ##############################################################
+        ComplianceResourceTypes:
+          - 'AWS::EC2::Instance'
+          - 'AWS::RDS::DBInstance'
+          - 'AWS::S3::Bucket'
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+          - EventSource: aws.config
+            MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier: !GetAtt
+          - RequiredTagsValueValidationRuleLambda
+          - Arn
